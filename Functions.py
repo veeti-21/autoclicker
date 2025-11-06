@@ -35,12 +35,14 @@ def start_clicking(interval_ms,
     mouse = MouseController()
 
     def click_loop():
+        i = 0
         kb = KeyboardController()
         mouse = MouseController()
         hold_started = False
         
         try:
             while is_clicking:
+                i += 1
                 # Define hk before using it
                 hk = hotkey.strip().lower() if hotkey else ""
                 

@@ -77,6 +77,7 @@ def on_click_stop():
     set_running_mode(False)   # re-enable UI
 
 def on_click_stop_done():
+    set_running_mode(False)
     btn_start.config(state="normal")
     btn_stop.config(state="disabled")
 
