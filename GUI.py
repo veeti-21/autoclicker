@@ -18,7 +18,7 @@ except (ImportError, ValueError):
 
 root = tk.Tk()
 root.title("Auto Clicker")
-root.geometry("500x400")
+root.geometry("415x300")
 root.resizable(False, False)
 
 clicker_running = {"active": False}
@@ -116,8 +116,23 @@ frame_options.pack(fill="x", padx=10, pady=5)
 ttk.Label(frame_options, text="Hotkey:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
 
 hotkey_var = tk.StringVar(value="None")
-entry_hotkey = ttk.Entry(frame_options, textvariable=hotkey_var, width=20, state="readonly")
+entry_hotkey = ttk.Entry(frame_options, textvariable=hotkey_var, width=20)  # Remove state="readonly"
 entry_hotkey.grid(row=2, column=1, padx=5, pady=5)
+
+# Add validation when manually entering hotkey
+def on_hotkey_changed(*args):
+    entered_key = hotkey_var.get().strip()
+    if entered_key.lower() == "none":
+        selected_hotkey["key"] = None
+        return
+        
+    # Handle special characters and modifiers
+    if entered_key and not entered_key.lower().startswith(("key:", "mouse:")):
+        hotkey_var.set(f"Key: {entered_key}")
+    
+    selected_hotkey["key"] = hotkey_var.get()
+
+hotkey_var.trace_add("write", on_hotkey_changed)
 
 is_listening_for_hotkey = {"active": False}
 selected_hotkey = {"key": None}
@@ -130,11 +145,14 @@ def start_hotkey_listen():
     hotkey_var.set("Press any key or mouse button...")
 
     def on_selected(selected_string):
+        # Handle shift + special character combinations
+        if "shift" in selected_string.lower() and any(char in selected_string for char in '!@#$%^&*()_+{}|:"<>?~'):
+            selected_string = selected_string.replace("Key: ", "Key: shift + ")
+            
         selected_hotkey["key"] = selected_string
         hotkey_var.set(selected_string)
         is_listening_for_hotkey["active"] = False
 
-    # start_hotkey_capture attaches transient bindings to root
     start_hotkey_capture(root, on_selected)
 
 ttk.Button(frame_options, text="Set Hotkey", width=15, command=start_hotkey_listen).grid(row=2, column=2, padx=5, pady=5)
@@ -172,24 +190,6 @@ ttk.Label(frame_repeat, text="ms").grid(row=0, column=5, sticky="w", padx=(2, 5)
 ttk.Radiobutton(frame_repeat, text="Hold down", variable=hold_mode_var, value="hold").grid(row=1, column=3, columnspan=3, sticky="w", padx=(20, 5))
 
 # ==== Cursor Position ====
-frame_cursor = ttk.LabelFrame(root, text="Cursor position")
-frame_cursor.pack(fill="x", padx=10, pady=5)
-
-pos_var = tk.StringVar(value="current")
-
-ttk.Radiobutton(frame_cursor, text="Current location", variable=pos_var, value="current").grid(row=0, column=0, sticky="w", padx=5)
-ttk.Radiobutton(frame_cursor, text="Pick location", variable=pos_var, value="pick").grid(row=0, column=1, sticky="w", padx=5)
-
-x_var = tk.StringVar(value="")
-y_var = tk.StringVar(value="")
-
-ttk.Label(frame_cursor, text="X").grid(row=0, column=2)
-entry_x = tk.Entry(frame_cursor, width=5, textvariable=x_var)
-entry_x.grid(row=0, column=3)
-ttk.Label(frame_cursor, text="Y").grid(row=0, column=4)
-entry_y = tk.Entry(frame_cursor, width=5, textvariable=y_var)
-entry_y.grid(row=0, column=5)
-
 def pick_position():
     """Run blocking pick on a worker thread and update UI via root.after."""
     def worker():
@@ -204,7 +204,25 @@ def pick_position():
         root.after(0, apply_result)
     threading.Thread(target=worker, daemon=True).start()
 
-ttk.Button(frame_cursor, text="Pick", width=10, command=pick_position).grid(row=0, column=6, padx=5)
+frame_cursor = ttk.LabelFrame(root, text="Cursor position")
+frame_cursor.pack(fill="x", padx=10, pady=5)
+
+pos_var = tk.StringVar(value="current")
+x_var = tk.StringVar(value="0")    # Add this
+y_var = tk.StringVar(value="0")    # Add this
+
+ttk.Radiobutton(frame_cursor, text="Current location", variable=pos_var, value="current").grid(row=0, column=0, sticky="w", padx=5)
+ttk.Radiobutton(frame_cursor, text="Pick location", variable=pos_var, value="pick").grid(row=0, column=1, sticky="w", padx=5)
+
+# Add Pick button next to radio buttons
+ttk.Button(frame_cursor, text="Pick", command=pick_position, width=8).grid(row=0, column=2, sticky="w", padx=5)
+
+ttk.Label(frame_cursor, text="X").grid(row=0, column=3)
+entry_x = tk.Entry(frame_cursor, width=5, textvariable=x_var)
+entry_x.grid(row=0, column=4)
+ttk.Label(frame_cursor, text="Y").grid(row=0, column=5)
+entry_y = tk.Entry(frame_cursor, width=5, textvariable=y_var)
+entry_y.grid(row=0, column=6)
 
 # ==== Buttons ====
 frame_buttons = tk.Frame(root)

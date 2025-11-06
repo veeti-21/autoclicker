@@ -1,4 +1,5 @@
 from pynput.mouse import Button, Controller as MouseController
+from pynput.keyboard import Controller as KeyboardController  # Add this line
 from pynput import mouse as pynput_mouse, keyboard as pynput_keyboard
 import keyboard as kb
 import threading
@@ -34,13 +35,15 @@ def start_clicking(interval_ms,
     mouse = MouseController()
 
     def click_loop():
-        i = 0
+        kb = KeyboardController()
+        mouse = MouseController()
         hold_started = False
-
+        
         try:
             while is_clicking:
-                i += 1
-
+                # Define hk before using it
+                hk = hotkey.strip().lower() if hotkey else ""
+                
                 # Move mouse if requested
                 if pos_mode == "pick" and x is not None and y is not None:
                     try:
@@ -48,90 +51,76 @@ def start_clicking(interval_ms,
                     except Exception:
                         pass
 
-                if hotkey:
-                    hk = hotkey.strip().lower()
+                # Mouse actions
+                if "mouse" in hk:
+                    btn = None
+                    if "left" in hk:
+                        btn = Button.left
+                    elif "right" in hk:
+                        btn = Button.right
+                    elif "middle" in hk:
+                        btn = Button.middle
+                    elif "button 4" in hk:
+                        btn = Button.x1
+                    elif "button 5" in hk:
+                        btn = Button.x2
 
-                    # If the captured string includes a "Key:" prefix (e.g. "Key: d")
-                    # remove it so we don't pass "key: d" to the keyboard lib.
-                    if hk.startswith("key:"):
-                        hk = hk.split(":", 1)[1].strip()
-                    
-                        # Mouse actions
-                        if "mouse" in hk:
-                            btn = None
-                            if "left" in hk:
-                                btn = Button.left
-                            elif "right" in hk:
-                                btn = Button.right
-                            elif "middle" in hk:
-                                btn = Button.middle
-                            elif "button 4" in hk:
-                                btn = Button.x1
-                            elif "button 5" in hk:
-                                btn = Button.x2
-
-                            if btn:
-                                if hold_mode == "press":
+                    if btn:
+                        if hold_mode == "press":
+                            try:
+                                mouse.press(btn)
+                                time.sleep(hold_time)
+                                mouse.release(btn)
+                            except Exception:
+                                pass
+                        elif hold_mode == "hold":
+                            def hold_mouse():
+                                try:
+                                    mouse.press(btn)
+                                    while is_clicking:
+                                        time.sleep(0.01)
+                                finally:
                                     try:
-                                        mouse.press(btn)
-                                        time.sleep(hold_time)
                                         mouse.release(btn)
                                     except Exception:
                                         pass
-                                elif hold_mode == "hold":
-                                    def hold_mouse():
-                                        try:
-                                            mouse.press(btn)
-                                            while is_clicking:
-                                                time.sleep(0.01)
-                                        finally:
-                                            try:
-                                                mouse.release(btn)
-                                            except Exception:
-                                                pass
-                                            if on_finish:
-                                                on_finish()
+                                    if on_finish:
+                                        on_finish()
 
-                                    threading.Thread(target=hold_mouse, daemon=True).start()
-                                    hold_started = True
-                                    break
+                            threading.Thread(target=hold_mouse, daemon=True).start()
+                            hold_started = True
+                            break
 
-                        # Keyboard actions
+                # Keyboard actions
+                elif hotkey:
+                    try:
+                        # Strip "Key: " prefix and any whitespace
+                        key = hotkey.replace("Key:", "").strip()
+                        
+                        # Handle special characters
+                        if "+" in key:
+                            # For compound keys like "shift + !"
+                            parts = [p.strip() for p in key.split("+")]
+                            for part in parts:
+                                kb.press(part)
+                            
+                            if hold_mode == "press":
+                                time.sleep(hold_time)
+                                for part in reversed(parts):
+                                    kb.release(part)
                         else:
-                            # get last token after modifiers like "ctrl + q"
-                            key_name = hk.split(" + ")[-1].strip()
-
-                            special_keys = {
-                                "space": "space", "enter": "enter", "esc": "esc",
-                                "shift": "shift", "ctrl": "ctrl", "alt": "alt",
-                                "tab": "tab", "backspace": "backspace",
-                            }
-                            key_to_press = special_keys.get(key_name, key_name)
-
-                            try:
-                                if hold_mode == "press":
-                                    kb.press(key_to_press)
-                                    time.sleep(hold_time)
-                                    kb.release(key_to_press)
-                                elif hold_mode == "hold":
-                                    def hold_key():
-                                        try:
-                                            kb.press(key_to_press)
-                                            while is_clicking:
-                                                time.sleep(0.01)
-                                        finally:
-                                            try:
-                                                kb.release(key_to_press)
-                                            except Exception:
-                                                pass
-                                            if on_finish:
-                                                on_finish()
-
-                                    threading.Thread(target=hold_key, daemon=True).start()
-                                    hold_started = True
-                                    break
-                            except Exception:
-                                pass
+                            # For single keys
+                            kb.press(key)
+                            if hold_mode == "press":
+                                time.sleep(hold_time)
+                                kb.release(key)
+                        
+                        if hold_mode == "hold":
+                            break  # Exit loop after first press in hold mode
+                            
+                    except Exception as e:
+                        print(f"Key press failed: {str(e)}")
+                        break
 
                 # Repeat termination
                 if repeat_mode == "repeat" and i >= repeat_times:
