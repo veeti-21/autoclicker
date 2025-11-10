@@ -8,14 +8,14 @@ try:
         start_clicking, stop_clicking,
         start_global_hotkey_listener, start_hotkey_capture,
         pick_position_blocking, validate_int_input, get_total_interval_ms_from_vars,
-        save_preset, load_preset
+        save_preset, load_preset, save_last_settings, load_last_settings
     )
 except (ImportError, ValueError):
     from functions import (
         start_clicking, stop_clicking,
         start_global_hotkey_listener, start_hotkey_capture,
         pick_position_blocking, validate_int_input, get_total_interval_ms_from_vars,
-        save_preset, load_preset
+        save_preset, load_preset,save_last_settings, load_last_settings
     )
 
 root = tk.Tk()
@@ -96,10 +96,38 @@ def on_click_stop():
     btn_stop.config(state="disabled")
     set_running_mode(False)   # re-enable UI
 
+    data = {
+        "interval": {lbl: interval_vars[i].get() for i, lbl in enumerate(interval_labels)},
+        "repeat_mode": repeat_var.get(),
+        "repeat_count": repeat_count.get(),
+        "hold_mode": hold_mode_var.get(),
+        "hold_time": hold_time_var.get(),
+        "pos_mode": pos_var.get(),
+        "x": x_var.get(),
+        "y": y_var.get(),
+        "hotkey": selected_hotkey["key"]
+    }
+    save_last_settings(data)
+
+    
+
 def on_click_stop_done():
     set_running_mode(False)
     btn_start.config(state="normal")
     btn_stop.config(state="disabled")
+
+    data = {
+        "interval": {lbl: interval_vars[i].get() for i, lbl in enumerate(interval_labels)},
+        "repeat_mode": repeat_var.get(),
+        "repeat_count": repeat_count.get(),
+        "hold_mode": hold_mode_var.get(),
+        "hold_time": hold_time_var.get(),
+        "pos_mode": pos_var.get(),
+        "x": x_var.get(),
+        "y": y_var.get(),
+        "hotkey": selected_hotkey["key"]
+    }
+    save_last_settings(data)
 
 # ==== Click Interval ====
 frame_interval = ttk.LabelFrame(root, text="Click interval")
@@ -323,5 +351,20 @@ def _on_close():
     root.destroy()
 
 root.protocol("WM_DELETE_WINDOW", _on_close)
+
+last_settings = load_last_settings()
+if last_settings:
+    for i, lbl in enumerate(interval_labels):
+        interval_vars[i].set(last_settings["interval"].get(lbl, "0"))
+    repeat_var.set(last_settings.get("repeat_mode", "until_stopped"))
+    repeat_count.set(last_settings.get("repeat_count", "1"))
+    hold_mode_var.set(last_settings.get("hold_mode", "press"))
+    hold_time_var.set(last_settings.get("hold_time", 50))
+    pos_var.set(last_settings.get("pos_mode", "current"))
+    x_var.set(last_settings.get("x", "0"))
+    y_var.set(last_settings.get("y", "0"))
+    selected_hotkey["key"] = last_settings.get("hotkey")
+    if selected_hotkey["key"]:
+        hotkey_var.set(selected_hotkey["key"])
 
 root.mainloop()

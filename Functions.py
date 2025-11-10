@@ -6,9 +6,39 @@ import threading
 import time
 import json
 from tkinter import filedialog, messagebox
+import os
+
 
 # Global flag used by start/stop_clicking
 is_clicking = False
+SETTINGS_FILE = "last_settings.json"
+
+def get_settings_path():
+    """Return a safe, writable path for storing user settings."""
+    appdata = os.getenv("APPDATA") or os.path.expanduser("~")
+    folder = os.path.join(appdata, "AutoClicker")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, "last_settings.json")
+
+def save_last_settings(data):
+    """Automatically save last used settings."""
+    try:
+        with open(get_settings_path(), "w") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"Failed to save last settings: {e}")
+
+def load_last_settings():
+    """Load last used settings if available."""
+    path = get_settings_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Failed to load last settings: {e}")
+        return None
 
 def save_preset(data):
     """Save current settings to a JSON file."""
