@@ -4,10 +4,42 @@ from pynput import mouse as pynput_mouse, keyboard as pynput_keyboard
 import keyboard as kb
 import threading
 import time
+import json
+from tkinter import filedialog, messagebox
 
 # Global flag used by start/stop_clicking
 is_clicking = False
 
+def save_preset(data):
+    """Save current settings to a JSON file."""
+    filepath = filedialog.asksaveasfilename(
+        defaultextension=".json",
+        filetypes=[("JSON Files", "*.json")],
+        title="Save Preset As"
+    )
+    if not filepath:
+        return
+    try:
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=4)
+        messagebox.showinfo("Preset Saved", f"Preset saved to:\n{filepath}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to save preset:\n{e}")
+
+def load_preset():
+    """Load settings from a JSON file."""
+    filepath = filedialog.askopenfilename(
+        filetypes=[("JSON Files", "*.json")],
+        title="Load Preset"
+    )
+    if not filepath:
+        return None
+    try:
+        with open(filepath, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to load preset:\n{e}")
+        return None
 
 def start_clicking(interval_ms,
                    hotkey=None,
@@ -256,3 +288,5 @@ def get_total_interval_ms_from_vars(interval_vars):
     except Exception:
         return 0
     return hours * 3600000 + mins * 60000 + secs * 1000 + millis
+
+

@@ -7,18 +7,20 @@ try:
     from .functions import (
         start_clicking, stop_clicking,
         start_global_hotkey_listener, start_hotkey_capture,
-        pick_position_blocking, validate_int_input, get_total_interval_ms_from_vars
+        pick_position_blocking, validate_int_input, get_total_interval_ms_from_vars,
+        save_preset, load_preset
     )
 except (ImportError, ValueError):
     from functions import (
         start_clicking, stop_clicking,
         start_global_hotkey_listener, start_hotkey_capture,
-        pick_position_blocking, validate_int_input, get_total_interval_ms_from_vars
+        pick_position_blocking, validate_int_input, get_total_interval_ms_from_vars,
+        save_preset, load_preset
     )
 
 root = tk.Tk()
 root.title("Auto Clicker")
-root.geometry("415x300")
+root.geometry("415x400")
 root.resizable(False, False)
 
 # === Always on Top (Pin) Option ===
@@ -252,6 +254,44 @@ btn_start.grid(row=0, column=0, padx=5, pady=5)
 
 btn_stop = ttk.Button(frame_buttons, text="Stop (F6)", width=18, command=on_click_stop, state="disabled")
 btn_stop.grid(row=0, column=1, padx=5, pady=5)
+def on_save_preset():
+    data = {
+        "interval": {lbl: interval_vars[i].get() for i, lbl in enumerate(interval_labels)},
+        "repeat_mode": repeat_var.get(),
+        "repeat_count": repeat_count.get(),
+        "hold_mode": hold_mode_var.get(),
+        "hold_time": hold_time_var.get(),
+        "pos_mode": pos_var.get(),
+        "x": x_var.get(),
+        "y": y_var.get(),
+        "hotkey": selected_hotkey["key"]
+    }
+    save_preset(data)
+
+def on_load_preset():
+    preset = load_preset()
+    if not preset:
+        return
+
+    for i, lbl in enumerate(interval_labels):
+        interval_vars[i].set(preset["interval"].get(lbl, "0"))
+    repeat_var.set(preset.get("repeat_mode", "until_stopped"))
+    repeat_count.set(preset.get("repeat_count", "1"))
+    hold_mode_var.set(preset.get("hold_mode", "press"))
+    hold_time_var.set(preset.get("hold_time", 50))
+    pos_var.set(preset.get("pos_mode", "current"))
+    x_var.set(preset.get("x", "0"))
+    y_var.set(preset.get("y", "0"))
+    selected_hotkey["key"] = preset.get("hotkey")
+    if selected_hotkey["key"]:
+        hotkey_var.set(selected_hotkey["key"])
+
+# --- Preset Buttons (below Start/Stop) ---
+btn_save_preset = ttk.Button(frame_buttons, text="Save Preset", width=18, command=on_save_preset)
+btn_save_preset.grid(row=1, column=0, padx=5, pady=2)
+
+btn_load_preset = ttk.Button(frame_buttons, text="Load Preset", width=18, command=on_load_preset)
+btn_load_preset.grid(row=1, column=1, padx=5, pady=2)
 
 # Helpers to disable/enable all interactive widgets except the Stop button
 def set_running_mode(running: bool):
