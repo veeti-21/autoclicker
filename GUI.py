@@ -21,6 +21,24 @@ root.title("Auto Clicker")
 root.geometry("415x300")
 root.resizable(False, False)
 
+# === Always on Top (Pin) Option ===
+pin_var = tk.BooleanVar(value=False)
+
+def toggle_pin():
+    root.attributes('-topmost', pin_var.get())
+
+frame_pin = ttk.Frame(root)
+frame_pin.pack(fill="x", padx=10, pady=3)
+
+pin_checkbox = ttk.Checkbutton(
+    frame_pin,
+    text="Pin window",
+    variable=pin_var,
+    command=toggle_pin
+)
+pin_checkbox.pack(anchor="w")
+
+
 clicker_running = {"active": False}
 
 def toggle_clicker():
