@@ -1,5 +1,5 @@
 from pynput.mouse import Button, Controller as MouseController
-from pynput.keyboard import Controller as KeyboardController  # Add this line
+from pynput.keyboard import Key, Controller as KeyboardController
 from pynput import mouse as pynput_mouse, keyboard as pynput_keyboard
 import keyboard as kb
 import threading
@@ -7,6 +7,16 @@ import time
 import json
 from tkinter import filedialog, messagebox
 import os
+
+# Try to import Windows API for better browser window targeting
+try:
+    import win32gui
+    import win32con
+    import win32process
+    import win32api
+    HAS_WIN32 = True
+except ImportError:
+    HAS_WIN32 = False
 
 
 # Global flag used by start/stop_clicking
@@ -208,40 +218,224 @@ def stop_clicking():
     is_clicking = False
 
 
+# Store hotkey handlers for removal
+_hotkey_handlers = {}
+
+def convert_to_keyboard_format(hotkey_string):
+    """
+    Convert hotkey from display format "Key: Alt + s" or "Alt + S" to keyboard module format "alt+s".
+    Also handles simple keys like "F6" -> "f6".
+    """
+    if not hotkey_string:
+        return "f6"
+    
+    # Remove "Key: " prefix if present
+    hotkey = hotkey_string.replace("Key:", "").strip()
+    
+    # Split by " + " or "+" to get parts
+    parts = [p.strip() for p in hotkey.replace(" + ", "+").split("+")]
+    
+    # Convert each part to lowercase for keyboard module
+    # Map common modifier names
+    modifier_map = {
+        "ctrl": "ctrl",
+        "control": "ctrl",
+        "alt": "alt",
+        "shift": "shift",
+        "win": "windows",
+        "windows": "windows",
+        "cmd": "command",
+        "command": "command"
+    }
+    
+    converted_parts = []
+    for part in parts:
+        part_lower = part.lower()
+        if part_lower in modifier_map:
+            converted_parts.append(modifier_map[part_lower])
+        else:
+            # For regular keys, just lowercase them
+            converted_parts.append(part_lower)
+    
+    return "+".join(converted_parts)
+
+def convert_to_display_format(hotkey_string):
+    """
+    Convert hotkey from keyboard module format "alt+s" to display format "Alt + S".
+    Also handles simple keys like "f6" -> "F6".
+    """
+    if not hotkey_string:
+        return "F6"
+    
+    # Remove "Key: " prefix if present
+    hotkey = hotkey_string.replace("Key:", "").strip()
+    
+    # Split by "+" to get parts
+    parts = [p.strip() for p in hotkey.split("+")]
+    
+    # Convert to display format
+    display_parts = []
+    for part in parts:
+        part_lower = part.lower()
+        # Capitalize modifiers properly
+        if part_lower == "ctrl":
+            display_parts.append("Ctrl")
+        elif part_lower == "alt":
+            display_parts.append("Alt")
+        elif part_lower == "shift":
+            display_parts.append("Shift")
+        elif part_lower in ["win", "windows"]:
+            display_parts.append("Win")
+        elif part_lower in ["cmd", "command"]:
+            display_parts.append("Cmd")
+        else:
+            # For regular keys, capitalize first letter (F6 -> F6, s -> S)
+            if len(part) > 1 and part[0].upper() == part[0]:
+                display_parts.append(part.upper() if part.isupper() else part.capitalize())
+            else:
+                display_parts.append(part.upper())
+    
+    return " + ".join(display_parts)
+
 def start_global_hotkey_listener(hotkey="F6", toggle_callback=None):
     """
     Register a global hotkey using the 'keyboard' module on a background thread.
     toggle_callback will be called when the hotkey is pressed.
+    hotkey can be in display format (e.g., "Alt + S") or keyboard format (e.g., "alt+s").
+    Returns the hotkey handler for later removal.
     """
+    # Convert to keyboard module format
+    keyboard_format = convert_to_keyboard_format(hotkey)
+    
     def listener():
-        if toggle_callback:
-            kb.add_hotkey(hotkey, toggle_callback)
-        else:
-            kb.add_hotkey(hotkey, lambda: None)
-        kb.wait()
+        try:
+            if toggle_callback:
+                handler = kb.add_hotkey(keyboard_format, toggle_callback)
+                _hotkey_handlers[hotkey] = handler
+                _hotkey_handlers[keyboard_format] = handler  # Also store by keyboard format
+            else:
+                handler = kb.add_hotkey(keyboard_format, lambda: None)
+                _hotkey_handlers[hotkey] = handler
+                _hotkey_handlers[keyboard_format] = handler
+            kb.wait()
+        except Exception as e:
+            print(f"Failed to register hotkey {keyboard_format}: {e}")
 
     threading.Thread(target=listener, daemon=True).start()
+    return _hotkey_handlers.get(hotkey) or _hotkey_handlers.get(keyboard_format)
+
+def remove_global_hotkey(hotkey="F6"):
+    """
+    Remove a global hotkey that was previously registered.
+    hotkey can be in display format or keyboard format.
+    """
+    try:
+        # Try both formats
+        keyboard_format = convert_to_keyboard_format(hotkey)
+        
+        # Try to remove by original format
+        if hotkey in _hotkey_handlers:
+            handler = _hotkey_handlers[hotkey]
+            kb.remove_hotkey(handler)
+            del _hotkey_handlers[hotkey]
+            if keyboard_format in _hotkey_handlers and _hotkey_handlers[keyboard_format] == handler:
+                del _hotkey_handlers[keyboard_format]
+            return True
+        
+        # Try to remove by keyboard format
+        if keyboard_format in _hotkey_handlers:
+            handler = _hotkey_handlers[keyboard_format]
+            kb.remove_hotkey(handler)
+            del _hotkey_handlers[keyboard_format]
+            # Clean up any references to this handler
+            keys_to_remove = [k for k, v in _hotkey_handlers.items() if v == handler]
+            for k in keys_to_remove:
+                del _hotkey_handlers[k]
+            return True
+    except Exception as e:
+        print(f"Failed to remove hotkey {hotkey}: {e}")
+    return False
 
 
 def start_hotkey_capture(root, on_selected):
     """
     Attach transient bindings to the provided Tk root to capture a keyboard key or mouse button.
     on_selected(selected_string) is called once with a readable string like "Key: Ctrl + q" or "Mouse: Left".
+    If only a modifier key is pressed, waits for the next key press.
     This does not block the mainloop.
     """
+    # Track if we're waiting for a key after a modifier
+    waiting_for_key = {"active": False}
+    captured_modifiers = {"list": []}
+    
+    # List of modifier keysyms
+    modifier_keys = {"Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R", 
+                     "Meta_L", "Meta_R", "Win_L", "Win_R", "Command_L", "Command_R"}
+    
     def on_key_press(event):
+        key_pressed = event.keysym
+        
+        # Check if this is a modifier key
+        is_modifier = (key_pressed in modifier_keys or 
+                      key_pressed in ["Shift", "Control", "Alt", "Meta", "Win", "Command"] or
+                      "Shift" in key_pressed or "Control" in key_pressed or 
+                      "Alt" in key_pressed or "Meta" in key_pressed)
+        
+        # Get current modifier state from event.state
         modifiers = []
-        if event.state & 0x0001:
+        if event.state & 0x0001:  # Shift
             modifiers.append("Shift")
-        if event.state & 0x0004:
+        if event.state & 0x0004:  # Ctrl
             modifiers.append("Ctrl")
-        if event.state & 0x0008:
+        if event.state & 0x0008:  # Alt
             modifiers.append("Alt")
-        key_pressed = event.char if event.char else event.keysym
-        combo = " + ".join(modifiers + [key_pressed])
+        # Win key is harder to detect via state, check keysym
+        if "Meta" in key_pressed or "Win" in key_pressed:
+            if "Win" not in modifiers:
+                modifiers.append("Win")
+        
+        # If only a modifier was pressed, wait for the next key
+        if is_modifier and not waiting_for_key["active"]:
+            waiting_for_key["active"] = True
+            captured_modifiers["list"] = modifiers.copy()
+            # Don't unbind, wait for next key
+            return
+        
+        # If we were waiting for a key after modifier, use captured modifiers
+        if waiting_for_key["active"]:
+            # Use the captured modifiers
+            final_modifiers = captured_modifiers["list"].copy()
+            waiting_for_key["active"] = False
+        else:
+            # Use current modifiers
+            final_modifiers = modifiers
+        
+        # Get the actual key (not modifier)
+        # Check if it's a printable character
+        if event.char and event.char.isprintable() and not is_modifier:
+            actual_key = event.char
+        elif not is_modifier:
+            # Use keysym for non-printable keys like F1-F12, etc.
+            actual_key = event.keysym
+            # Normalize function keys (F1-F12)
+            if actual_key.startswith("F") and actual_key[1:].isdigit():
+                actual_key = actual_key.upper()
+        else:
+            # Still a modifier, wait more
+            return
+        
+        # Build the combination
+        if final_modifiers:
+            combo = " + ".join(final_modifiers + [actual_key])
+        else:
+            combo = actual_key
+        
         on_selected(f"Key: {combo}")
         root.unbind("<KeyPress>")
         root.unbind("<Button>")
+        root.unbind("<KeyRelease>")
+        waiting_for_key["active"] = False
+        captured_modifiers["list"] = []
 
     def on_mouse_click(event):
         button_map = {1: "Left", 2: "Middle", 3: "Right"}
@@ -249,6 +443,9 @@ def start_hotkey_capture(root, on_selected):
         on_selected(f"Mouse: {btn_name}")
         root.unbind("<KeyPress>")
         root.unbind("<Button>")
+        root.unbind("<KeyRelease>")
+        waiting_for_key["active"] = False
+        captured_modifiers["list"] = []
 
     root.bind("<KeyPress>", on_key_press)
     root.bind("<Button>", on_mouse_click)
@@ -320,3 +517,119 @@ def get_total_interval_ms_from_vars(interval_vars):
     return hours * 3600000 + mins * 60000 + secs * 1000 + millis
 
 
+def pause_youtube():
+    """
+    Pause/play YouTube video by sending spacebar to the browser window.
+    Works even when tabbed out to another application.
+    """
+    try:
+        previous_window = None
+        
+        # Try to find and activate browser window if Windows API is available
+        if HAS_WIN32:
+            def enum_handler(hwnd, ctx):
+                window_title = win32gui.GetWindowText(hwnd)
+                # Look for common browser windows (Chrome, Firefox, Edge, Opera)
+                browsers = ["chrome", "firefox", "msedge", "opera", "brave", "vivaldi"]
+                if any(browser in window_title.lower() for browser in browsers):
+                    # Check if window is visible and not minimized
+                    if win32gui.IsWindowVisible(hwnd):
+                        ctx.append(hwnd)
+                return True
+            
+            browser_windows = []
+            win32gui.EnumWindows(enum_handler, browser_windows)
+            
+            if browser_windows:
+                # Get the currently active window to restore later
+                try:
+                    previous_window = win32gui.GetForegroundWindow()
+                except Exception:
+                    pass
+                
+                # Activate the first browser window found
+                browser_hwnd = browser_windows[0]
+                try:
+                    win32gui.ShowWindow(browser_hwnd, win32con.SW_RESTORE)
+                    win32gui.SetForegroundWindow(browser_hwnd)
+                    time.sleep(0.1)  # Brief delay to ensure window is focused
+                except Exception:
+                    pass
+        
+        # Send spacebar to pause/play
+        kb_controller = KeyboardController()
+        kb_controller.press(' ')
+        time.sleep(0.05)
+        kb_controller.release(' ')
+        
+        # Restore focus to previous window if we switched
+        if HAS_WIN32 and previous_window:
+            try:
+                time.sleep(0.1)
+                win32gui.SetForegroundWindow(previous_window)
+            except Exception:
+                pass
+                
+    except Exception as e:
+        # Fallback: just send spacebar globally
+        try:
+            kb_controller = KeyboardController()
+            kb_controller.press(' ')
+            time.sleep(0.05)
+            kb_controller.release(' ')
+        except Exception:
+            pass
+
+def pause_spotify():
+    """
+    Pause/play Spotify by sending a media_play_pause command.
+    Tries to target Spotify-like applications directly to avoid pausing other media (e.g., YouTube).
+    """
+    if not HAS_WIN32:
+        # Fallback to global key press if win32api is not available
+        try:
+            kb_controller = KeyboardController()
+            kb_controller.press(Key.media_play_pause)
+            kb_controller.release(Key.media_play_pause)
+        except Exception as e:
+            print(f"Failed to send media key press: {e}")
+        return
+
+    try:
+        spotify_hwnd = None
+        def find_spotify_window(hwnd, _):
+            nonlocal spotify_hwnd
+            # We are looking for a visible window with a title.
+            if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd):
+                try:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    handle = win32api.OpenProcess(win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ, False, pid)
+                    proc_name = win32process.GetModuleFileNameEx(handle, 0)
+                    win32api.CloseHandle(handle)
+                    if "spotify.exe" in proc_name.lower():
+                        spotify_hwnd = hwnd
+                        return False  # Stop enumeration
+                except Exception:
+                    pass # Could fail for some processes
+            return True
+
+        win32gui.EnumWindows(find_spotify_window, None)
+  
+        if spotify_hwnd:
+            # Found spotify, send command to it
+            WM_APPCOMMAND = 0x0319
+            APPCOMMAND_MEDIA_PLAY_PAUSE = 14
+            win32gui.PostMessage(spotify_hwnd, WM_APPCOMMAND, 0, APPCOMMAND_MEDIA_PLAY_PAUSE << 16)
+        else:
+            # If no specific window is found, fall back to the global key press.
+            raise Exception("Spotify process not found.")
+         
+    except Exception as e:
+        print(f"Failed to send targeted media command: {e}. Falling back to global key press.")
+        # Fallback to global key press on any failure
+        try:
+            kb_controller = KeyboardController()
+            kb_controller.press(Key.media_play_pause)
+            kb_controller.release(Key.media_play_pause)
+        except Exception as e2:
+            print(f"Fallback media key press also failed: {e2}")
