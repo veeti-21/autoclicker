@@ -569,6 +569,7 @@ btn_start.grid(row=0, column=0, padx=5, pady=5)
 
 btn_stop = ttk.Button(frame_buttons, text=f"Stop ({f6_hotkey_var.get()})", width=18, command=on_click_stop, state="disabled")
 btn_stop.grid(row=0, column=1, padx=5, pady=5)
+
 def on_save_preset():
     data = {
         "interval": {lbl: interval_vars[i].get() for i, lbl in enumerate(interval_labels)},
@@ -579,13 +580,7 @@ def on_save_preset():
         "pos_mode": pos_var.get(),
         "x": x_var.get(),
         "y": y_var.get(),
-        "hotkey": selected_hotkey["key"],
-        "youtube_pause_enabled": youtube_pause_var.get(),
-        "f6_hotkey": f6_hotkey_var.get(),
-        "f7_hotkey": f7_hotkey_var.get(),
-        "spotify_pause_enabled": spotify_pause_var.get(),
-        "spotify_hotkey": spotify_hotkey_var.get(),
-        "pin_enabled": pin_var.get()
+        "hotkey": selected_hotkey["key"]
     }
     save_preset(data)
 
@@ -606,20 +601,7 @@ def on_load_preset():
     selected_hotkey["key"] = preset.get("hotkey")
     if selected_hotkey["key"]:
         hotkey_var.set(selected_hotkey["key"])
-    youtube_pause_var.set(preset.get("youtube_pause_enabled", False))
-    f6_hotkey_var.set(preset.get("f6_hotkey", "F6"))
-    f7_hotkey_var.set(preset.get("f7_hotkey", "F7"))
-    spotify_pause_var.set(preset.get("spotify_pause_enabled", False))
-    spotify_hotkey_var.set(preset.get("spotify_hotkey", "F8"))
-    pin_var.set(preset.get("pin_enabled", False))
-    toggle_pin()
-    update_f6_hotkey()
-    update_f7_hotkey()
-    update_spotify_hotkey()
-    toggle_spotify_pause()
-    toggle_youtube_pause()  # Apply the setting
 
-# --- Preset Buttons (below Start/Stop) ---
 btn_save_preset = ttk.Button(frame_buttons, text="Save Preset", width=18, command=on_save_preset)
 btn_save_preset.grid(row=1, column=0, padx=5, pady=2)
 
