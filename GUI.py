@@ -88,86 +88,109 @@ current_f7_hotkey = "F7"
 current_spotify_hotkey = "F8"
 
 def update_f6_hotkey():
+    """Update F6 hotkey for start/stop toggle."""
     global current_f6_hotkey
     old_hotkey = current_f6_hotkey
-    new_hotkey_display = f6_hotkey_var.get().strip() or "F6"
-
-    # Always remove all previous listeners
-    remove_global_hotkey(old_hotkey)
+    new_hotkey_display = f6_hotkey_var.get().strip()
+    
+    if not new_hotkey_display:
+        new_hotkey_display = "F6"
+        f6_hotkey_var.set("F6")
+    
+    # Remove old hotkey if it changed
+    if old_hotkey != new_hotkey_display:
+        remove_global_hotkey(old_hotkey)
+    
+    # Always remove and re-register to ensure clean state
     remove_global_hotkey(new_hotkey_display)
-
-    # Register once
+    
+    # Register new hotkey (function will convert to keyboard format)
     start_global_hotkey_listener(new_hotkey_display, toggle_clicker)
-
     current_f6_hotkey = new_hotkey_display
-
+    
+    # Update button text with display format
     btn_start.config(text=f"Start ({new_hotkey_display})")
     btn_stop.config(text=f"Stop ({new_hotkey_display})")
-
+    
+    # Save settings
     save_settings()
-
 
 def update_f7_hotkey():
+    """Update F7 hotkey for YouTube pause."""
     global current_f7_hotkey
     old_hotkey = current_f7_hotkey
-    new_hotkey_display = f7_hotkey_var.get().strip() or "F7"
-
-    remove_global_hotkey(old_hotkey)
+    new_hotkey_display = f7_hotkey_var.get().strip()
+    
+    if not new_hotkey_display:
+        new_hotkey_display = "F7"
+        f7_hotkey_var.set("F7")
+    
+    # Remove old hotkey if it changed
+    if old_hotkey != new_hotkey_display:
+        remove_global_hotkey(old_hotkey)
+    
+    # Always remove and re-register to ensure clean state
     remove_global_hotkey(new_hotkey_display)
-
-    # Only register when checkbox is ON
+    
+    # Register new hotkey if enabled (function will convert to keyboard format)
     if youtube_pause_var.get():
         start_global_hotkey_listener(new_hotkey_display, pause_youtube)
-
     current_f7_hotkey = new_hotkey_display
+    
+    # Update checkbox text with display format
     youtube_pause_checkbox.config(text=f"YouTube pause ({new_hotkey_display})")
-
+    
+    # Save settings
     save_settings()
-
-
 
 def toggle_youtube_pause():
+    """Enable/disable YouTube pause hotkey."""
+    global current_f7_hotkey
     hotkey_display = f7_hotkey_var.get().strip() or "F7"
-
+    current_f7_hotkey = hotkey_display
+    
+    # Always remove first to avoid duplicates
     remove_global_hotkey(hotkey_display)
-
+    
     if youtube_pause_var.get():
+        # Enable hotkey (function will convert to keyboard format)
         start_global_hotkey_listener(hotkey_display, pause_youtube)
-
+    
+    # Save settings
     save_settings()
-
-
 
 # Spotify pause option
 spotify_pause_var = tk.BooleanVar(value=False)
 
 def update_spotify_hotkey():
+    """Update Spotify pause hotkey."""
     global current_spotify_hotkey
     old_hotkey = current_spotify_hotkey
-    new_hotkey_display = spotify_hotkey_var.get().strip() or "F8"
+    new_hotkey_display = spotify_hotkey_var.get().strip()
 
-    remove_global_hotkey(old_hotkey)
+    if not new_hotkey_display:
+        new_hotkey_display = "F8"
+        spotify_hotkey_var.set("F8")
+
+    if old_hotkey != new_hotkey_display:
+        remove_global_hotkey(old_hotkey)
+
     remove_global_hotkey(new_hotkey_display)
 
     if spotify_pause_var.get():
         start_global_hotkey_listener(new_hotkey_display, pause_spotify)
-
     current_spotify_hotkey = new_hotkey_display
+
     spotify_pause_checkbox.config(text=f"Spotify pause/play ({new_hotkey_display})")
-
     save_settings()
-
 
 def toggle_spotify_pause():
+    """Enable/disable Spotify pause hotkey."""
     hotkey_display = spotify_hotkey_var.get().strip() or "F8"
-
     remove_global_hotkey(hotkey_display)
-
     if spotify_pause_var.get():
         start_global_hotkey_listener(hotkey_display, pause_spotify)
-
     save_settings()
-
 
 
 youtube_pause_checkbox = ttk.Checkbutton(

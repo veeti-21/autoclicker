@@ -310,11 +310,11 @@ def start_global_hotkey_listener(hotkey="F6", toggle_callback=None):
     def listener():
         try:
             if toggle_callback:
-                handler = kb.add_hotkey(keyboard_format, toggle_callback, suppress=True)
+                handler = kb.add_hotkey(keyboard_format, toggle_callback)
                 _hotkey_handlers[hotkey] = handler
                 _hotkey_handlers[keyboard_format] = handler  # Also store by keyboard format
             else:
-                handler = kb.add_hotkey(keyboard_format, lambda: None, suppress=True)
+                handler = kb.add_hotkey(keyboard_format, lambda: None)
                 _hotkey_handlers[hotkey] = handler
                 _hotkey_handlers[keyboard_format] = handler
             kb.wait()
@@ -326,26 +326,35 @@ def start_global_hotkey_listener(hotkey="F6", toggle_callback=None):
 
 def remove_global_hotkey(hotkey="F6"):
     """
-    Remove all registrations of this hotkey (display or keyboard format).
-    Prevents duplicate triggers.
+    Remove a global hotkey that was previously registered.
+    hotkey can be in display format or keyboard format.
     """
     try:
+        # Try both formats
         keyboard_format = convert_to_keyboard_format(hotkey)
-        to_delete = []
-
-        for key, handler in list(_hotkey_handlers.items()):
-            if key.lower() in (hotkey.lower(), keyboard_format.lower()):
-                kb.remove_hotkey(handler)
-                to_delete.append(key)
-
-        for key in to_delete:
-            _hotkey_handlers.pop(key, None)
-
-        return True
+        
+        # Try to remove by original format
+        if hotkey in _hotkey_handlers:
+            handler = _hotkey_handlers[hotkey]
+            kb.remove_hotkey(handler)
+            del _hotkey_handlers[hotkey]
+            if keyboard_format in _hotkey_handlers and _hotkey_handlers[keyboard_format] == handler:
+                del _hotkey_handlers[keyboard_format]
+            return True
+        
+        # Try to remove by keyboard format
+        if keyboard_format in _hotkey_handlers:
+            handler = _hotkey_handlers[keyboard_format]
+            kb.remove_hotkey(handler)
+            del _hotkey_handlers[keyboard_format]
+            # Clean up any references to this handler
+            keys_to_remove = [k for k, v in _hotkey_handlers.items() if v == handler]
+            for k in keys_to_remove:
+                del _hotkey_handlers[k]
+            return True
     except Exception as e:
         print(f"Failed to remove hotkey {hotkey}: {e}")
-        return False
-
+    return False
 
 
 def start_hotkey_capture(root, on_selected):
@@ -445,7 +454,7 @@ def start_hotkey_capture(root, on_selected):
 def pick_position_blocking(root, prompt_message=None):
     """
     Hide root, wait for a mouse click or Esc, restore root and return (x, y) tuple.
-    Returns None if cancelled. Blocking — run this from a worker thread if you don't want to freeze UI.
+    Returns None if cancelled. Blocking - run this from a worker thread if you don't want to freeze UI.
     """
     pos = {"x": None, "y": None, "cancel": False}
 
@@ -508,98 +517,92 @@ def get_total_interval_ms_from_vars(interval_vars):
     return hours * 3600000 + mins * 60000 + secs * 1000 + millis
 
 
-# --- ADD THIS NEAR THE TOP OF functions.py (e.g., after imports) ---
-_debounce_timers = {"youtube": 0.0, "spotify": 0.0}
-# -------------------------------------------------------------------
+# Global variable to track last YouTube pause time for debounce
+last_youtube_pause_time = 0
 
-
-# --- REPLACE THE EXISTING pause_youtube FUNCTION WITH THIS ---
 def pause_youtube():
     """
-    Pause/play YouTube video by sending spacebar to the browser window.
-    Includes a 0.5s debounce to prevent double-triggering.
+    Pause/play YouTube video by bringing the browser to foreground and sending Spacebar.
+    This is the most reliable method for browser control, though it steals focus.
+    Includes a 500ms debounce to prevent double-triggering.
     """
-    global _debounce_timers
+    global last_youtube_pause_time
     current_time = time.time()
     
-    # If less than 500ms has passed since last trigger, ignore this call
-    if current_time - _debounce_timers["youtube"] < 0.5:
+    # Debounce: ignore if called within 500ms of last call
+    if current_time - last_youtube_pause_time < 0.5:
         return
         
-    _debounce_timers["youtube"] = current_time
+    last_youtube_pause_time = current_time
 
     try:
-        previous_window = None
-        
-        # Try to find and activate browser window if Windows API is available
+        # Try to find browser window if Windows API is available
         if HAS_WIN32:
-            def enum_handler(hwnd, ctx):
+            found_browser = False
+            def enum_handler(hwnd, _):
+                nonlocal found_browser
+                if found_browser:
+                    return False # Stop if already found
+                    
                 window_title = win32gui.GetWindowText(hwnd)
-                # Look for common browser windows
-                browsers = ["chrome", "firefox", "msedge", "opera", "brave", "vivaldi"]
-                if any(browser in window_title.lower() for browser in browsers):
-                    if win32gui.IsWindowVisible(hwnd):
-                        ctx.append(hwnd)
+                title_lower = window_title.lower()
+                
+                # Only target windows with "youtube" in the title to avoid interference
+                if win32gui.IsWindowVisible(hwnd) and "youtube" in title_lower:
+                    try:
+                        # Bring window to foreground
+                        # Only restore if minimized (IsIconic) to avoid exiting full screen
+                        if win32gui.IsIconic(hwnd):
+                            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                        
+                        win32gui.SetForegroundWindow(hwnd)
+                        
+                        # Small delay to ensure focus switch happens
+                        time.sleep(0.05)
+                        
+                        # Send Spacebar
+                        kb_controller = KeyboardController()
+                        kb_controller.press(Key.space)
+                        kb_controller.release(Key.space)
+                        
+                        found_browser = True
+                        return False
+                    except Exception:
+                        # Sometimes SetForegroundWindow fails, but we proceed or pass.
+                        pass
                 return True
             
-            browser_windows = []
-            win32gui.EnumWindows(enum_handler, browser_windows)
+            win32gui.EnumWindows(enum_handler, None)
             
-            if browser_windows:
-                try:
-                    previous_window = win32gui.GetForegroundWindow()
-                except Exception:
-                    pass
-                
-                browser_hwnd = browser_windows[0]
-                if previous_window != browser_hwnd:
-                    try:
-                        win32gui.ShowWindow(browser_hwnd, win32con.SW_RESTORE)
-                        win32gui.SetForegroundWindow(browser_hwnd)
-                        time.sleep(0.1)
-                    except Exception:
-                        pass
-        
-        # Send spacebar
-        kb_controller = KeyboardController()
-        kb_controller.press(' ')
-        time.sleep(0.05)
-        kb_controller.release(' ')
-        
-        # Restore focus
-        if HAS_WIN32 and previous_window:
-            try:
-                time.sleep(0.1)
-                win32gui.SetForegroundWindow(previous_window)
-            except Exception:
-                pass
+            if found_browser:
+                return
+
+        # Fallback: Do nothing if no specific window is found.
+        # We explicitly DO NOT send a global media key here to avoid Spotify interference.
                 
     except Exception as e:
-        # Fallback
-        try:
-            kb_controller = KeyboardController()
-            kb_controller.press(' ')
-            time.sleep(0.05)
-            kb_controller.release(' ')
-        except Exception:
-            pass
+        print(f"Failed to pause YouTube: {e}")
 
+# Global variable to track last Spotify pause time for debounce
+last_spotify_pause_time = 0
 
-# --- REPLACE THE EXISTING pause_spotify FUNCTION WITH THIS ---
 def pause_spotify():
     """
-    Pause/play Spotify. Includes a 0.5s debounce to prevent double-triggering.
+    Pause/play Spotify by sending a media_play_pause command.
+    Tries to target Spotify-like applications directly to avoid pausing other media (e.g., YouTube).
+    Includes a 500ms debounce to prevent double-triggering.
     """
-    global _debounce_timers
+    global last_spotify_pause_time
     current_time = time.time()
     
-    # If less than 500ms has passed since last trigger, ignore this call
-    if current_time - _debounce_timers["spotify"] < 0.5:
+    # Debounce: ignore if called within 500ms of last call
+    if current_time - last_spotify_pause_time < 0.5:
         return
-
-    _debounce_timers["spotify"] = current_time
+        
+    last_spotify_pause_time = current_time
 
     if not HAS_WIN32:
+        # Fallback to global key press if win32api is not available
         try:
             kb_controller = KeyboardController()
             kb_controller.press(Key.media_play_pause)
@@ -612,6 +615,7 @@ def pause_spotify():
         spotify_hwnd = None
         def find_spotify_window(hwnd, _):
             nonlocal spotify_hwnd
+            # We are looking for a visible window with a title.
             if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd):
                 try:
                     _, pid = win32process.GetWindowThreadProcessId(hwnd)
@@ -620,22 +624,25 @@ def pause_spotify():
                     win32api.CloseHandle(handle)
                     if "spotify.exe" in proc_name.lower():
                         spotify_hwnd = hwnd
-                        return False
+                        return False  # Stop enumeration
                 except Exception:
-                    pass
+                    pass # Could fail for some processes
             return True
 
         win32gui.EnumWindows(find_spotify_window, None)
   
         if spotify_hwnd:
+            # Found spotify, send command to it
             WM_APPCOMMAND = 0x0319
             APPCOMMAND_MEDIA_PLAY_PAUSE = 14
             win32gui.PostMessage(spotify_hwnd, WM_APPCOMMAND, 0, APPCOMMAND_MEDIA_PLAY_PAUSE << 16)
         else:
+            # If no specific window is found, fall back to the global key press.
             raise Exception("Spotify process not found.")
          
     except Exception as e:
-        print(f"Failed to send targeted media command. Falling back to global key press.")
+        print(f"Failed to send targeted media command: {e}. Falling back to global key press.")
+        # Fallback to global key press on any failure
         try:
             kb_controller = KeyboardController()
             kb_controller.press(Key.media_play_pause)
