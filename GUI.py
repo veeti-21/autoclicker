@@ -3,23 +3,23 @@ import tkinter as tk
 from tkinter import ttk
 
 # Try package-relative import (works when run as module). Fall back to direct import (works when run as script).
-try:               
-    from .functions import (
+try:
+    from Youtube import pause_youtube
+    from Spotify import pause_spotify               
+    from Autoclicker import (
         start_clicking, stop_clicking,
         start_global_hotkey_listener, remove_global_hotkey, start_hotkey_capture,
         pick_position_blocking, validate_int_input, get_total_interval_ms_from_vars,
-        pick_position_blocking, validate_int_input, get_total_interval_ms_from_vars, pause_spotify,
-        save_preset, load_preset, save_last_settings, load_last_settings,
-        pause_youtube, convert_to_display_format, convert_to_keyboard_format
+        save_preset, load_preset,save_last_settings, load_last_settings, convert_to_display_format
     )
 except (ImportError, ValueError):
-    from functions import (
+    from Youtube import pause_youtube
+    from Spotify import pause_spotify
+    from Autoclicker import (
         start_clicking, stop_clicking,
         start_global_hotkey_listener, remove_global_hotkey, start_hotkey_capture,
         pick_position_blocking, validate_int_input, get_total_interval_ms_from_vars,
-        pick_position_blocking, validate_int_input, get_total_interval_ms_from_vars, pause_spotify,
-        save_preset, load_preset,save_last_settings, load_last_settings,
-        pause_youtube, convert_to_display_format, convert_to_keyboard_format
+        save_preset, load_preset,save_last_settings, load_last_settings, convert_to_display_format
     )
 
 root = tk.Tk()
