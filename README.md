@@ -6,9 +6,8 @@ A small tool to automate mouse clicks with configurable intervals, click type, n
 
 ## Features
 - Start/stop autoclicker with F6 hotkey
-- Pause/play YouTube videos with F7 hotkey (works even when tabbed out)
 - Configurable click interval (hours, minutes, seconds, milliseconds)
-- Click type: left / right / middle / button 4 / button 5
+- Click type: left / right / middle / button 4 / button 5 
 - Keyboard hotkey support (single keys or key combinations)
 - Option to run for a set number of clicks or until stopped
 - Hold mode: press and release, or hold down continuously
