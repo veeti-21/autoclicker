@@ -26,11 +26,6 @@ A small tool to automate mouse clicks with configurable intervals, click type, n
 - keyboard (for global hotkeys)
 - tkinter (usually included with Python)
 
-### Optional packages (for better YouTube pause functionality):
-- pywin32 (enables targeting browser window specifically when tabbed out)
-  - Install with: `pip install pywin32`
-  - Without this, F7 will still work but may send spacebar to the active window instead of the browser
-
 ## Installation
 
 Clone the repository:
