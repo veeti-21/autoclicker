@@ -40,24 +40,11 @@ git clone https://github.com/veeti-21/autoclicker.git
 cd autoclicker
 ```
 
-Create a virtual environment and activate it (recommended):
-
-```
-python -m venv .venv
-# macOS/Linux
-source .venv/bin/activate
-# Windows
-.venv\Scripts\activate
-```
-
 Install required packages (example):
 
 ```
 pip install pynput keyboard
 ```
-
-## License
-Choose a license and replace this line, e.g.: MIT License — see LICENSE file for details.
 
 ## Credits
 Created by @veeti-21
