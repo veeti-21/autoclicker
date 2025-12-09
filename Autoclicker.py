@@ -1,28 +1,31 @@
+# Autoclicker.py
+# Hotkey manager rewritten to avoid pywin32 (uses keyboard + pynput)
+
 from pynput.mouse import Button, Controller as MouseController
 from pynput.keyboard import Key, Controller as KeyboardController
 from pynput import mouse as pynput_mouse, keyboard as pynput_keyboard
-import keyboard as kb
 import threading
 import time
 import json
 from tkinter import filedialog, messagebox
 import os
+import sys
+import ctypes
+from ctypes import wintypes
 
+_session_monitor_running = False
+_session_monitor_handles = {"hwnd": None, "thread": None, "running": False}
+
+# Try to import keyboard module for global hotkeys (pure-Python fallback)
 try:
-    import win32gui
-    import win32con
-    import win32process
-    import win32api
-    HAS_WIN32 = True
-except ImportError:
-    HAS_WIN32 = False
+    import keyboard as kb
+    _HAS_KEYBOARD = True
+except Exception:
+    kb = None
+    _HAS_KEYBOARD = False
+    print("Warning: 'keyboard' module not found. Install with `pip install keyboard` for global hotkeys.")
 
-# Global flag used by start/stop_clicking
-is_clicking = False
-SETTINGS_FILE = "last_settings.json"
-# Store hotkey handlers for removal
-_hotkey_handlers = {}
-
+# --- Settings / Persistence helpers ---
 def get_settings_path():
     """Return a safe, writable path for storing user settings."""
     appdata = os.getenv("APPDATA") or os.path.expanduser("~")
@@ -51,7 +54,7 @@ def load_last_settings():
         return None
 
 def save_preset(data):
-    """Save current settings to a JSON file."""
+    """Save current settings to a JSON file via file dialog."""
     filepath = filedialog.asksaveasfilename(
         defaultextension=".json",
         filetypes=[("JSON Files", "*.json")],
@@ -67,7 +70,7 @@ def save_preset(data):
         messagebox.showerror("Error", f"Failed to save preset:\n{e}")
 
 def load_preset():
-    """Load settings from a JSON file."""
+    """Load settings from a JSON file via file dialog."""
     filepath = filedialog.askopenfilename(
         filetypes=[("JSON Files", "*.json")],
         title="Load Preset"
@@ -80,6 +83,29 @@ def load_preset():
     except Exception as e:
         messagebox.showerror("Error", f"Failed to load preset:\n{e}")
         return None
+
+# --- Interval helper (used by GUI.py) ---
+def get_total_interval_ms_from_vars(interval_vars):
+    """
+    Compute total interval in milliseconds from [hours, mins, secs, ms] string vars.
+    """
+    try:
+        hours = int(interval_vars[0].get())
+        mins = int(interval_vars[1].get())
+        secs = int(interval_vars[2].get())
+        millis = int(interval_vars[3].get())
+    except Exception:
+        return 0
+    return hours * 3600000 + mins * 60000 + secs * 1000 + millis
+
+def validate_int_input(value_if_allowed):
+    """Tk validation callable for integer-only inputs (disallow empty)."""
+    if value_if_allowed == "":
+        return False
+    return str(value_if_allowed).isdigit()
+
+# --- Clicker logic (unchanged semantic behavior) ---
+is_clicking = False
 
 def start_clicking(interval_ms,
                    hotkey=None,
@@ -97,10 +123,6 @@ def start_clicking(interval_ms,
     - hotkey: human-readable string like "Key: Ctrl + q" or "Mouse: Left"
     - on_finish: optional callback invoked when loop naturally finishes (or after release in hold)
     - repeat_mode: "until_stopped" or "repeat"
-    - repeat_times: number of repeats when repeat_mode == "repeat"
-    - pos_mode: "current" or "pick" (if pick, x and y should be provided)
-    - hold_mode: "press" (press+release) or "hold" (keep held until stop)
-    - hold_time: seconds to keep key/button pressed in press mode
     """
     global is_clicking
     is_clicking = True
@@ -108,90 +130,96 @@ def start_clicking(interval_ms,
 
     def click_loop():
         i = 0
-        kb = KeyboardController()
-        mouse = MouseController()
+        kb_controller = KeyboardController()
+        mouse_controller = MouseController()
         hold_started = False
-        
+
         try:
             while is_clicking:
                 i += 1
-                # Define hk before using it
                 hk = hotkey.strip().lower() if hotkey else ""
-                
+
                 # Move mouse if requested
                 if pos_mode == "pick" and x is not None and y is not None:
                     try:
-                        mouse.position = (int(x), int(y))
+                        mouse_controller.position = (int(x), int(y))
                     except Exception:
                         pass
 
                 # Mouse actions
                 if "mouse" in hk:
-                    btn = None
-                    if "left" in hk:
-                        btn = Button.left
-                    elif "right" in hk:
-                        btn = Button.right
-                    elif "middle" in hk:
-                        btn = Button.middle
-                    elif "button 4" in hk:
-                        btn = Button.x1
-                    elif "button 5" in hk:
-                        btn = Button.x2
+                    # Check for scroll actions first
+                    if "scroll up" in hk:
+                        try:
+                            mouse_controller.scroll(0, 1)  # Scroll up (positive delta)
+                        except Exception:
+                            pass
+                    elif "scroll down" in hk:
+                        try:
+                            mouse_controller.scroll(0, -1)  # Scroll down (negative delta)
+                        except Exception:
+                            pass
+                    else:
+                        # Handle button clicks
+                        btn = None
+                        if "left" in hk:
+                            btn = Button.left
+                        elif "right" in hk:
+                            btn = Button.right
+                        elif "middle" in hk:
+                            btn = Button.middle
+                        elif "button 4" in hk or "x1" in hk:
+                            btn = Button.x1
+                        elif "button 5" in hk or "x2" in hk:
+                            btn = Button.x2
 
-                    if btn:
-                        if hold_mode == "press":
-                            try:
-                                mouse.press(btn)
-                                time.sleep(hold_time)
-                                mouse.release(btn)
-                            except Exception:
-                                pass
-                        elif hold_mode == "hold":
-                            def hold_mouse():
+                        if btn:
+                            if hold_mode == "press":
                                 try:
-                                    mouse.press(btn)
-                                    while is_clicking:
-                                        time.sleep(0.01)
-                                finally:
+                                    mouse_controller.press(btn)
+                                    time.sleep(hold_time)
+                                    mouse_controller.release(btn)
+                                except Exception:
+                                    pass
+                            elif hold_mode == "hold":
+                                def hold_mouse():
                                     try:
-                                        mouse.release(btn)
-                                    except Exception:
-                                        pass
-                                    if on_finish:
-                                        on_finish()
+                                        mouse_controller.press(btn)
+                                        while is_clicking:
+                                            time.sleep(0.01)
+                                    finally:
+                                        try:
+                                            mouse_controller.release(btn)
+                                        except Exception:
+                                            pass
+                                        if on_finish:
+                                            on_finish()
 
-                            threading.Thread(target=hold_mouse, daemon=True).start()
-                            hold_started = True
-                            break
+                                threading.Thread(target=hold_mouse, daemon=True).start()
+                                hold_started = True
+                                break
 
                 # Keyboard actions
                 elif hotkey:
                     try:
-                        # Strip "Key: " prefix and any whitespace
                         key = hotkey.replace("Key:", "").strip()
-                        
-                        # Handle special characters
                         if "+" in key:
-                            # For compound keys like "shift + !"
-                            parts = [p.strip() for p in key.split("+")]
+                            parts = [p.strip() for p in key.replace(" + ", "+").split("+")]
                             for part in parts:
-                                kb.press(part)
-                            
+                                kb_controller.press(part)
                             if hold_mode == "press":
                                 time.sleep(hold_time)
                                 for part in reversed(parts):
-                                    kb.release(part)
+                                    kb_controller.release(part)
                         else:
-                            # For single keys
-                            kb.press(key)
+                            kb_controller.press(key)
                             if hold_mode == "press":
                                 time.sleep(hold_time)
-                                kb.release(key)
-                        
+                                kb_controller.release(key)
+
                         if hold_mode == "hold":
                             break  # Exit loop after first press in hold mode
-                            
+
                     except Exception as e:
                         print(f"Key press failed: {str(e)}")
                         break
@@ -205,7 +233,6 @@ def start_clicking(interval_ms,
                     time.sleep(max(0, interval_ms / 1000))
 
         finally:
-            # Ensure click loop flag toggled; holder threads call on_finish themselves
             if on_finish and not hold_started:
                 on_finish()
 
@@ -216,214 +243,293 @@ def stop_clicking():
     global is_clicking
     is_clicking = False
 
+# --- Hotkey conversion helpers (display <-> normalized) ---
 def convert_to_keyboard_format(hotkey_string):
     """
-    Convert hotkey from display format "Key: Alt + s" or "Alt + S" to keyboard module format "alt+s".
+    Convert hotkey from display format "Key: Alt + s" or "Alt + S" to normalized format "alt+s".
     Also handles simple keys like "F6" -> "f6".
     """
     if not hotkey_string:
         return "f6"
-    
-    # Remove "Key: " prefix if present
+
     hotkey = hotkey_string.replace("Key:", "").strip()
-    
-    # Split by " + " or "+" to get parts
     parts = [p.strip() for p in hotkey.replace(" + ", "+").split("+")]
-    
-    # Convert each part to lowercase for keyboard module
-    # Map common modifier names
+
     modifier_map = {
         "ctrl": "ctrl",
         "control": "ctrl",
         "alt": "alt",
         "shift": "shift",
-        "win": "windows",
-        "windows": "windows",
-        "cmd": "command",
-        "command": "command"
+        "win": "win",
+        "windows": "win",
+        "cmd": "cmd",
+        "command": "cmd"
     }
-    
-    converted_parts = []
-    for part in parts:
-        part_lower = part.lower()
-        if part_lower in modifier_map:
-            converted_parts.append(modifier_map[part_lower])
+
+    converted = []
+    for p in parts:
+        pl = p.lower()
+        if pl in modifier_map:
+            converted.append(modifier_map[pl])
         else:
-            # For regular keys, just lowercase them
-            converted_parts.append(part_lower)
-    
-    return "+".join(converted_parts)
+            converted.append(pl)
+    return "+".join(converted)
 
 def convert_to_display_format(hotkey_string):
     """
-    Convert hotkey from keyboard module format "alt+s" to display format "Alt + S".
+    Convert hotkey from normalized format "alt+s" to display format "Alt + S".
     Also handles simple keys like "f6" -> "F6".
     """
     if not hotkey_string:
         return "F6"
-    
-    # Remove "Key: " prefix if present
     hotkey = hotkey_string.replace("Key:", "").strip()
-    
-    # Split by "+" to get parts
     parts = [p.strip() for p in hotkey.split("+")]
-    
-    # Convert to display format
     display_parts = []
     for part in parts:
-        part_lower = part.lower()
-        # Capitalize modifiers properly
-        if part_lower == "ctrl":
+        pl = part.lower()
+        if pl == "ctrl":
             display_parts.append("Ctrl")
-        elif part_lower == "alt":
+        elif pl == "alt":
             display_parts.append("Alt")
-        elif part_lower == "shift":
+        elif pl == "shift":
             display_parts.append("Shift")
-        elif part_lower in ["win", "windows"]:
+        elif pl in ["win", "windows"]:
             display_parts.append("Win")
-        elif part_lower in ["cmd", "command"]:
+        elif pl in ["cmd", "command"]:
             display_parts.append("Cmd")
         else:
-            # For regular keys, capitalize first letter (F6 -> F6, s -> S)
-            if len(part) > 1 and part[0].upper() == part[0]:
-                display_parts.append(part.upper() if part.isupper() else part.capitalize())
-            else:
-                display_parts.append(part.upper())
-    
+            display_parts.append(part.upper())
     return " + ".join(display_parts)
 
-def start_global_hotkey_listener(hotkey="F6", toggle_callback=None):
-    """
-    Register a global hotkey using the 'keyboard' module on a background thread.
-    toggle_callback will be called when the hotkey is pressed.
-    hotkey can be in display format (e.g., "Alt + S") or keyboard format (e.g., "alt+s").
-    Returns the hotkey handler for later removal.
-    """
-    # Convert to keyboard module format
-    keyboard_format = convert_to_keyboard_format(hotkey)
-    
-    def listener():
-        try:
-            if toggle_callback:
-                handler = kb.add_hotkey(keyboard_format, toggle_callback)
-                _hotkey_handlers[hotkey] = handler
-                _hotkey_handlers[keyboard_format] = handler  # Also store by keyboard format
-            else:
-                handler = kb.add_hotkey(keyboard_format, lambda: None)
-                _hotkey_handlers[hotkey] = handler
-                _hotkey_handlers[keyboard_format] = handler
-            kb.wait()
-        except Exception as e:
-            print(f"Failed to register hotkey {keyboard_format}: {e}")
+# --- New hotkey manager (keyboard + pynput mouse) ---
 
-    threading.Thread(target=listener, daemon=True).start()
-    return _hotkey_handlers.get(hotkey) or _hotkey_handlers.get(keyboard_format)
+# Storage for registered handlers
+_keyboard_handlers = {}   # normalized_kb_format -> {'handler': id, 'callback': cb, 'display': display}
+_mouse_handlers = {}      # display like "Mouse: Left" -> callback
+_mouse_listener = None
+_mouse_listener_lock = threading.Lock()
 
-def remove_global_hotkey(hotkey="F6"):
+def _ensure_mouse_listener():
+    """Ensure a single global mouse listener is running to dispatch mouse button hotkeys."""
+    global _mouse_listener
+    with _mouse_listener_lock:
+        if _mouse_listener and _mouse_listener.running:
+            return
+        # Start a listener that checks presses and calls matching callbacks
+        def on_click(x, y, button, pressed):
+            if not pressed:
+                return
+            # Map Button to display string
+            btn_map = {
+                Button.left: "Mouse: Left",
+                Button.right: "Mouse: Right",
+                Button.middle: "Mouse: Middle",
+                Button.x1: "Mouse: Button 4",
+                Button.x2: "Mouse: Button 5"
+            }
+            disp = btn_map.get(button)
+            if disp and disp in _mouse_handlers:
+                try:
+                    cb = _mouse_handlers[disp]
+                    if cb:
+                        threading.Thread(target=cb, daemon=True).start()
+                except Exception:
+                    pass
+
+        _mouse_listener = pynput_mouse.Listener(on_click=on_click)
+        _mouse_listener.daemon = True
+        _mouse_listener.start()
+
+def start_global_hotkey_listener(display_hotkey="F6", toggle_callback=None):
     """
-    Remove a global hotkey that was previously registered.
-    hotkey can be in display format or keyboard format.
+    Register a global hotkey. Accepts display string like "F6", "Alt + S", "Key: Ctrl + q", or "Mouse: Left".
+    Returns handler info or None on failure.
     """
+    if not display_hotkey:
+        return None
+
+    display_hotkey = display_hotkey.strip()
+    # Mouse handler
+    if display_hotkey.lower().startswith("mouse:"):
+        # normalize display to canonical casing
+        disp = display_hotkey
+        # register in mouse handlers dict
+        _mouse_handlers[disp] = toggle_callback
+        _ensure_mouse_listener()
+        return {'type': 'mouse', 'display': disp, 'callback': toggle_callback}
+
+    # Keyboard handler
+    if not _HAS_KEYBOARD or not kb:
+        print(f"keyboard module not available — cannot register hotkey {display_hotkey}")
+        return None
+
     try:
-        # Try both formats
-        keyboard_format = convert_to_keyboard_format(hotkey)
-        
-        # Try to remove by original format
-        if hotkey in _hotkey_handlers:
-            handler = _hotkey_handlers[hotkey]
-            kb.remove_hotkey(handler)
-            del _hotkey_handlers[hotkey]
-            if keyboard_format in _hotkey_handlers and _hotkey_handlers[keyboard_format] == handler:
-                del _hotkey_handlers[keyboard_format]
-            return True
-        
-        # Try to remove by keyboard format
-        if keyboard_format in _hotkey_handlers:
-            handler = _hotkey_handlers[keyboard_format]
-            kb.remove_hotkey(handler)
-            del _hotkey_handlers[keyboard_format]
-            # Clean up any references to this handler
-            keys_to_remove = [k for k, v in _hotkey_handlers.items() if v == handler]
-            for k in keys_to_remove:
-                del _hotkey_handlers[k]
-            return True
+        kb_format = convert_to_keyboard_format(display_hotkey)
+        # Remove existing if present
+        if kb_format in _keyboard_handlers:
+            try:
+                kb.remove_hotkey(_keyboard_handlers[kb_format]['handler'])
+            except Exception:
+                pass
+            del _keyboard_handlers[kb_format]
+
+        # Use keyboard.add_hotkey — it returns an internal handler that can be removed by remove_hotkey
+        handler = kb.add_hotkey(kb_format, toggle_callback if toggle_callback else (lambda: None))
+        _keyboard_handlers[kb_format] = {'handler': handler, 'callback': toggle_callback, 'display': display_hotkey}
+        return _keyboard_handlers[kb_format]
     except Exception as e:
-        print(f"Failed to remove hotkey {hotkey}: {e}")
+        print(f"Fallback keyboard registration failed for {display_hotkey}: {e}")
+        return None
+
+def remove_global_hotkey(display_hotkey="F6"):
+    """
+    Remove a previously registered hotkey by display string. Returns True if removed.
+    """
+    if not display_hotkey:
+        return False
+    display_hotkey = display_hotkey.strip()
+
+    # Mouse remove
+    if display_hotkey.lower().startswith("mouse:"):
+        if display_hotkey in _mouse_handlers:
+            del _mouse_handlers[display_hotkey]
+            return True
+        # try case-insensitive find
+        for k in list(_mouse_handlers.keys()):
+            if k.lower() == display_hotkey.lower():
+                del _mouse_handlers[k]
+                return True
+        return False
+
+    # Keyboard remove
+    if not _HAS_KEYBOARD or not kb:
+        return False
+
+    kb_fmt = convert_to_keyboard_format(display_hotkey)
+    # try exact match
+    if kb_fmt in _keyboard_handlers:
+        try:
+            kb.remove_hotkey(_keyboard_handlers[kb_fmt]['handler'])
+        except Exception:
+            pass
+        del _keyboard_handlers[kb_fmt]
+        return True
+
+    # try match by display label
+    for k, v in list(_keyboard_handlers.items()):
+        if v.get('display') == display_hotkey:
+            try:
+                kb.remove_hotkey(v['handler'])
+            except Exception:
+                pass
+            del _keyboard_handlers[k]
+            return True
+
+    # try case-insensitive compare
+    for k, v in list(_keyboard_handlers.items()):
+        if v.get('display', '').lower() == display_hotkey.lower():
+            try:
+                kb.remove_hotkey(v['handler'])
+            except Exception:
+                pass
+            del _keyboard_handlers[k]
+            return True
+
     return False
 
+def re_register_all_hotkeys():
+    """
+    Re-register all currently stored hotkeys (useful after a transient platform event).
+    For keyboard: reconstruct registrations from stored snapshot.
+    For mouse: listener persists.
+    """
+    if not _HAS_KEYBOARD or not kb:
+        # keyboard module unavailable — nothing to re-register
+        return
+
+    # Snapshot current (display, callback) pairs
+    snapshot = []
+    for fmt, info in list(_keyboard_handlers.items()):
+        snapshot.append((info.get('display'), info.get('callback')))
+
+    # Remove everything
+    for fmt, info in list(_keyboard_handlers.items()):
+        try:
+            kb.remove_hotkey(info['handler'])
+        except Exception:
+            pass
+    _keyboard_handlers.clear()
+
+    # Re-register
+    for display, callback in snapshot:
+        try:
+            kb_format = convert_to_keyboard_format(display)
+            handler = kb.add_hotkey(kb_format, callback if callback else (lambda: None))
+            _keyboard_handlers[kb_format] = {'handler': handler, 'callback': callback, 'display': display}
+        except Exception as e:
+            print(f"Failed to re-register fallback hotkey {display}: {e}")
+
+# --- Hotkey capture for GUI (Tkinter based) ---
 def start_hotkey_capture(root, on_selected):
     """
     Attach transient bindings to the provided Tk root to capture a keyboard key or mouse button.
     on_selected(selected_string) is called once with a readable string like "Key: Ctrl + q" or "Mouse: Left".
-    If only a modifier key is pressed, waits for the next key press.
     This does not block the mainloop.
     """
-    # Track if we're waiting for a key after a modifier
     waiting_for_key = {"active": False}
     captured_modifiers = {"list": []}
-    
-    # List of modifier keysyms
-    modifier_keys = {"Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R", 
+
+    modifier_keys = {"Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R",
                      "Meta_L", "Meta_R", "Win_L", "Win_R", "Command_L", "Command_R"}
-    
+
     def on_key_press(event):
         key_pressed = event.keysym
-        
-        # Check if this is a modifier key
-        is_modifier = (key_pressed in modifier_keys or 
-                      key_pressed in ["Shift", "Control", "Alt", "Meta", "Win", "Command"] or
-                      "Shift" in key_pressed or "Control" in key_pressed or 
-                      "Alt" in key_pressed or "Meta" in key_pressed)
-        
-        # Get current modifier state from event.state
+
+        is_modifier = (key_pressed in modifier_keys or
+                       key_pressed in ["Shift", "Control", "Alt", "Meta", "Win", "Command"] or
+                       "Shift" in key_pressed or "Control" in key_pressed or
+                       "Alt" in key_pressed or "Meta" in key_pressed)
+
         modifiers = []
-        if event.state & 0x0001:  # Shift
-            modifiers.append("Shift")
-        if event.state & 0x0004:  # Ctrl
-            modifiers.append("Ctrl")
-        if event.state & 0x0008:  # Alt
-            modifiers.append("Alt")
-        # Win key is harder to detect via state, check keysym
+        # Detect modifier state via event.state bits (works reliably for common modifiers)
+        try:
+            if event.state & 0x0001:  # Shift
+                modifiers.append("Shift")
+            if event.state & 0x0004:  # Ctrl
+                modifiers.append("Ctrl")
+            if event.state & 0x0008:  # Alt
+                modifiers.append("Alt")
+        except Exception:
+            pass
         if "Meta" in key_pressed or "Win" in key_pressed:
             if "Win" not in modifiers:
                 modifiers.append("Win")
-        
-        # If only a modifier was pressed, wait for the next key
+
         if is_modifier and not waiting_for_key["active"]:
             waiting_for_key["active"] = True
             captured_modifiers["list"] = modifiers.copy()
-            # Don't unbind, wait for next key
             return
-        
-        # If we were waiting for a key after modifier, use captured modifiers
+
         if waiting_for_key["active"]:
-            # Use the captured modifiers
             final_modifiers = captured_modifiers["list"].copy()
             waiting_for_key["active"] = False
         else:
-            # Use current modifiers
             final_modifiers = modifiers
-        
-        # Get the actual key (not modifier)
-        # Check if it's a printable character
+
         if event.char and event.char.isprintable() and not is_modifier:
             actual_key = event.char
         elif not is_modifier:
-            # Use keysym for non-printable keys like F1-F12, etc.
             actual_key = event.keysym
-            # Normalize function keys (F1-F12)
             if actual_key.startswith("F") and actual_key[1:].isdigit():
                 actual_key = actual_key.upper()
         else:
-            # Still a modifier, wait more
             return
-        
-        # Build the combination
+
         if final_modifiers:
             combo = " + ".join(final_modifiers + [actual_key])
         else:
             combo = actual_key
-        
+
         on_selected(f"Key: {combo}")
         root.unbind("<KeyPress>")
         root.unbind("<Button>")
@@ -437,13 +543,29 @@ def start_hotkey_capture(root, on_selected):
         on_selected(f"Mouse: {btn_name}")
         root.unbind("<KeyPress>")
         root.unbind("<Button>")
+        root.unbind("<MouseWheel>")
+        root.unbind("<KeyRelease>")
+        waiting_for_key["active"] = False
+        captured_modifiers["list"] = []
+
+    def on_mouse_scroll(event):
+        # Detect scroll direction (positive delta = scroll up, negative = scroll down)
+        if event.delta > 0:
+            on_selected("Mouse: Scroll Up")
+        else:
+            on_selected("Mouse: Scroll Down")
+        root.unbind("<KeyPress>")
+        root.unbind("<Button>")
+        root.unbind("<MouseWheel>")
         root.unbind("<KeyRelease>")
         waiting_for_key["active"] = False
         captured_modifiers["list"] = []
 
     root.bind("<KeyPress>", on_key_press)
     root.bind("<Button>", on_mouse_click)
+    root.bind("<MouseWheel>", on_mouse_scroll)
 
+# --- Position picker (pynput based) ---
 def pick_position_blocking(root, prompt_message=None):
     """
     Hide root, wait for a mouse click or Esc, restore root and return (x, y) tuple.
@@ -457,9 +579,12 @@ def pick_position_blocking(root, prompt_message=None):
             return False
 
     def on_key_press(key):
-        if key == pynput_keyboard.Key.esc:
-            pos["cancel"] = True
-            return False
+        try:
+            if key == pynput_keyboard.Key.esc:
+                pos["cancel"] = True
+                return False
+        except Exception:
+            pass
 
     root.withdraw()
     if prompt_message:
@@ -487,27 +612,189 @@ def pick_position_blocking(root, prompt_message=None):
         return (int(pos["x"]), int(pos["y"]))
     return None
 
-def validate_int_input(value_if_allowed):
-    """Tk validation callable for integer-only inputs (disallow empty)."""
-    if value_if_allowed == "":
-        return False
-    return str(value_if_allowed).isdigit()
 
-def get_total_interval_ms_from_vars(interval_vars):
+_session_monitor_running = False
+_session_monitor_handles = {"hwnd": None, "thread": None, "running": False}
+
+def start_session_monitor():
     """
-    Compute total interval in milliseconds from a list/sequence of objects
-    that implement .get() returning strings for [hours, mins, secs, ms].
+    Start a lightweight session monitor that listens for Windows lock/unlock events
+    (WM_WTSSESSION_CHANGE). On unlock we call re_register_all_hotkeys() to restore
+    keyboard registrations. Silent auto-repair (Option A).
     """
-    try:
-        hours = int(interval_vars[0].get())
-        mins = int(interval_vars[1].get())
-        secs = int(interval_vars[2].get())
-        millis = int(interval_vars[3].get())
-    except Exception:
-        return 0
-    return hours * 3600000 + mins * 60000 + secs * 1000 + millis
+    global _session_monitor_running, _session_monitor_handles
 
+    if _session_monitor_running:
+        return
+    _session_monitor_running = True
 
+    # Only available on Windows
+    if sys.platform != "win32":
+        # Fallback: keep the old simple poll monitor to at least try re-registering periodically
+        def fallback_monitor():
+            last_snapshot = None
+            while True:
+                try:
+                    current_keys = sorted([v.get('display', '') for v in _keyboard_handlers.values()])
+                    if current_keys != last_snapshot:
+                        time.sleep(0.5)
+                        re_register_all_hotkeys()
+                        last_snapshot = current_keys
+                    time.sleep(3)
+                except Exception:
+                    time.sleep(2)
+        threading.Thread(target=fallback_monitor, daemon=True).start()
+        return
 
+    user32 = ctypes.windll.user32
+    wtsapi32 = ctypes.windll.wtsapi32
+    kernel32 = ctypes.windll.kernel32
 
+    # Constants
+    WM_WTSSESSION_CHANGE = 0x02B1
+    WTS_SESSION_LOCK = 0x7
+    WTS_SESSION_UNLOCK = 0x8
+    NOTIFY_FOR_THIS_SESSION = 0  # WTSRegisterSessionNotification flag
 
+    # WNDPROC prototype
+    WNDPROCTYPE = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p)
+
+    class WNDCLASS(ctypes.Structure):
+        _fields_ = [
+            ("style", ctypes.c_uint),
+            ("lpfnWndProc", WNDPROCTYPE),
+            ("cbClsExtra", ctypes.c_int),
+            ("cbWndExtra", ctypes.c_int),
+            ("hInstance", ctypes.c_void_p),
+            ("hIcon", ctypes.c_void_p),
+            ("hCursor", ctypes.c_void_p),
+            ("hbrBackground", ctypes.c_void_p),
+            ("lpszMenuName", ctypes.c_wchar_p),
+            ("lpszClassName", ctypes.c_wchar_p),
+        ]
+
+    def _message_thread():
+        # Unique class name to avoid collisions
+        cls_name = "AutoClickerSessionMonitorWindow"
+
+        # WndProc implementation
+        @WNDPROCTYPE
+        def _wndproc(hwnd, msg, wparam, lparam):
+            try:
+                if msg == WM_WTSSESSION_CHANGE:
+                    try:
+                        ev = int(wparam)
+                        # On unlock, rebuild hotkeys quietly
+                        if ev == WTS_SESSION_UNLOCK:
+                            # small delay to allow desktop to settle
+                            time.sleep(0.25)
+                            try:
+                                re_register_all_hotkeys()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    return 0
+                return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+            except Exception:
+                return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        # Register window class
+        hInstance = kernel32.GetModuleHandleW(None)
+        wndclass = WNDCLASS()
+        wndclass.style = 0
+        wndclass.lpfnWndProc = _wndproc
+        wndclass.cbClsExtra = 0
+        wndclass.cbWndExtra = 0
+        wndclass.hInstance = hInstance
+        wndclass.hIcon = None
+        wndclass.hCursor = None
+        wndclass.hbrBackground = None
+        wndclass.lpszMenuName = None
+        wndclass.lpszClassName = cls_name
+
+        atom = user32.RegisterClassW(ctypes.byref(wndclass))
+        if not atom:
+            # If registration fails, still attempt the message loop with a default class name
+            pass
+
+        # Create message-only window: HWND_MESSAGE (special) is available on Win2000+ as -3
+        HWND_MESSAGE = -3
+        hwnd = user32.CreateWindowExW(
+            0,
+            cls_name,
+            "AutoClickerSessionMonitor",
+            0,
+            0, 0, 0, 0,
+            HWND_MESSAGE,
+            0,
+            hInstance,
+            None
+        )
+
+        if not hwnd:
+            # fallback: create a normal hidden window (less ideal) and continue
+            hwnd = user32.CreateWindowExW(0, cls_name, "AutoClickerSessionMonitor", 0, 0, 0, 0, 0, 0, 0, hInstance, None)
+
+        # Register for session notifications
+        try:
+            # BOOL WTSRegisterSessionNotification(HWND hWnd, DWORD dwFlags)
+            res = wtsapi32.WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION)
+            # res==0 -> failure, but we can still run a periodic re-register fallback
+        except Exception:
+            res = 0
+
+        # Message loop
+        msg = wintypes.MSG()
+        _session_monitor_handles["hwnd"] = hwnd
+        _session_monitor_handles["running"] = True
+
+        while _session_monitor_handles.get("running", False):
+            has_msg = user32.GetMessageW(ctypes.byref(msg), 0, 0, 0)
+            if has_msg == 0:
+                break
+            if has_msg == -1:
+                # error
+                break
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+
+        # Cleanup
+        try:
+            wtsapi32.WTSUnRegisterSessionNotification(hwnd)
+        except Exception:
+            pass
+        try:
+            user32.DestroyWindow(hwnd)
+        except Exception:
+            pass
+        _session_monitor_handles["hwnd"] = None
+        _session_monitor_handles["running"] = False
+
+    # Start message thread
+    t = threading.Thread(target=_message_thread, daemon=True)
+    _session_monitor_handles["thread"] = t
+    t.start()
+
+    # Also keep a tiny fallback poll to ensure re-register if anything odd happens
+    def poll_fallback():
+        last_snapshot = None
+        while True:
+            try:
+                current_keys = sorted([v.get('display', '') for v in _keyboard_handlers.values()])
+                if current_keys != last_snapshot:
+                    time.sleep(0.5)
+                    re_register_all_hotkeys()
+                    last_snapshot = current_keys
+                time.sleep(3)
+            except Exception:
+                time.sleep(2)
+
+    threading.Thread(target=poll_fallback, daemon=True).start()
+# Provide module-level names expected by GUI.py:
+# start_clicking, stop_clicking, start_global_hotkey_listener, remove_global_hotkey,
+# start_hotkey_capture, pick_position_blocking, validate_int_input,
+# get_total_interval_ms_from_vars, save_preset, load_preset, save_last_settings, load_last_settings,
+# convert_to_display_format, start_session_monitor
+
+# End of file

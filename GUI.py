@@ -3,9 +3,7 @@ import tkinter as tk
 from tkinter import ttk
 
 # Try package-relative import (works when run as module). Fall back to direct import (works when run as script).
-try:
-    from Youtube import pause_youtube
-    from Spotify import pause_spotify               
+try: 
     from Autoclicker import (
         start_clicking, stop_clicking,
         start_global_hotkey_listener, remove_global_hotkey, start_hotkey_capture,
@@ -13,8 +11,6 @@ try:
         save_preset, load_preset,save_last_settings, load_last_settings, convert_to_display_format
     )
 except (ImportError, ValueError):
-    from Youtube import pause_youtube
-    from Spotify import pause_spotify
     from Autoclicker import (
         start_clicking, stop_clicking,
         start_global_hotkey_listener, remove_global_hotkey, start_hotkey_capture,
@@ -79,13 +75,11 @@ youtube_pause_var = tk.BooleanVar(value=False)
 
 # Store current hotkey values
 f6_hotkey_var = tk.StringVar(value="F6")
-f7_hotkey_var = tk.StringVar(value="F7")
-spotify_hotkey_var = tk.StringVar(value="F8")
+
 
 # Track currently registered hotkeys
 current_f6_hotkey = "F6"
-current_f7_hotkey = "F7"
-current_spotify_hotkey = "F8"
+
 
 def update_f6_hotkey():
     """Update F6 hotkey for start/stop toggle."""
@@ -115,99 +109,6 @@ def update_f6_hotkey():
     # Save settings
     save_settings()
 
-def update_f7_hotkey():
-    """Update F7 hotkey for YouTube pause."""
-    global current_f7_hotkey
-    old_hotkey = current_f7_hotkey
-    new_hotkey_display = f7_hotkey_var.get().strip()
-    
-    if not new_hotkey_display:
-        new_hotkey_display = "F7"
-        f7_hotkey_var.set("F7")
-    
-    # Remove old hotkey if it changed
-    if old_hotkey != new_hotkey_display:
-        remove_global_hotkey(old_hotkey)
-    
-    # Always remove and re-register to ensure clean state
-    remove_global_hotkey(new_hotkey_display)
-    
-    # Register new hotkey if enabled (function will convert to keyboard format)
-    if youtube_pause_var.get():
-        start_global_hotkey_listener(new_hotkey_display, pause_youtube)
-    current_f7_hotkey = new_hotkey_display
-    
-    # Update checkbox text with display format
-    youtube_pause_checkbox.config(text=f"YouTube pause ({new_hotkey_display})")
-    
-    # Save settings
-    save_settings()
-
-def toggle_youtube_pause():
-    """Enable/disable YouTube pause hotkey."""
-    global current_f7_hotkey
-    hotkey_display = f7_hotkey_var.get().strip() or "F7"
-    current_f7_hotkey = hotkey_display
-    
-    # Always remove first to avoid duplicates
-    remove_global_hotkey(hotkey_display)
-    
-    if youtube_pause_var.get():
-        # Enable hotkey (function will convert to keyboard format)
-        start_global_hotkey_listener(hotkey_display, pause_youtube)
-    
-    # Save settings
-    save_settings()
-
-# Spotify pause option
-spotify_pause_var = tk.BooleanVar(value=False)
-
-def update_spotify_hotkey():
-    """Update Spotify pause hotkey."""
-    global current_spotify_hotkey
-    old_hotkey = current_spotify_hotkey
-    new_hotkey_display = spotify_hotkey_var.get().strip()
-
-    if not new_hotkey_display:
-        new_hotkey_display = "F8"
-        spotify_hotkey_var.set("F8")
-
-    if old_hotkey != new_hotkey_display:
-        remove_global_hotkey(old_hotkey)
-
-    remove_global_hotkey(new_hotkey_display)
-
-    if spotify_pause_var.get():
-        start_global_hotkey_listener(new_hotkey_display, pause_spotify)
-    current_spotify_hotkey = new_hotkey_display
-
-    spotify_pause_checkbox.config(text=f"Spotify pause/play ({new_hotkey_display})")
-    save_settings()
-
-def toggle_spotify_pause():
-    """Enable/disable Spotify pause hotkey."""
-    hotkey_display = spotify_hotkey_var.get().strip() or "F8"
-    remove_global_hotkey(hotkey_display)
-    if spotify_pause_var.get():
-        start_global_hotkey_listener(hotkey_display, pause_spotify)
-    save_settings()
-
-
-youtube_pause_checkbox = ttk.Checkbutton(
-    frame_settings,
-    text="YouTube pause (F7)",
-    variable=youtube_pause_var,
-    command=toggle_youtube_pause
-)
-youtube_pause_checkbox.grid(row=0, column=1, sticky="w", padx=5, pady=3)
-
-spotify_pause_checkbox = ttk.Checkbutton(
-    frame_settings,
-    text="Spotify pause/play (F8)",
-    variable=spotify_pause_var,
-    command=toggle_spotify_pause
-)
-spotify_pause_checkbox.grid(row=0, column=2, sticky="w", padx=5, pady=3)
 
 # F6 hotkey setting
 ttk.Label(frame_settings, text="Start/Stop hotkey:").grid(row=1, column=0, sticky="w", padx=5, pady=3)
@@ -250,82 +151,6 @@ def set_f6_hotkey():
 
 ttk.Button(frame_settings, text="Set", width=8, command=set_f6_hotkey).grid(row=1, column=2, padx=5, pady=3)
 
-# F7 hotkey setting
-ttk.Label(frame_settings, text="YouTube pause hotkey:").grid(row=2, column=0, sticky="w", padx=5, pady=3)
-entry_f7 = ttk.Entry(frame_settings, textvariable=f7_hotkey_var, width=20)
-entry_f7.grid(row=2, column=1, sticky="w", padx=5, pady=3)
-
-# Update hotkey when entry loses focus
-def on_f7_entry_return(event):
-    # Convert to display format if needed
-    current = f7_hotkey_var.get().strip()
-    if current and "+" in current.lower() and not " + " in current:
-        # User typed "alt+s" format, convert to display format
-        display = convert_to_display_format(current)
-        f7_hotkey_var.set(display)
-    update_f7_hotkey()
-entry_f7.bind("<Return>", on_f7_entry_return)
-entry_f7.bind("<FocusOut>", lambda e: on_f7_entry_return(None))
-
-is_listening_f7 = {"active": False}
-
-def set_f7_hotkey():
-    """Capture F7 hotkey."""
-    if is_listening_f7["active"]:
-        return
-    is_listening_f7["active"] = True
-    f7_hotkey_var.set("Press any key...")
-    
-    def on_selected(selected_string):
-        # Keep the full combination including modifiers
-        if selected_string.startswith("Key: "):
-            # Store in display format
-            display_format = selected_string.replace("Key: ", "")
-            f7_hotkey_var.set(display_format)
-        else:
-            f7_hotkey_var.set("F7")  # Default fallback
-        is_listening_f7["active"] = False
-        update_f7_hotkey()
-    
-    start_hotkey_capture(root, on_selected)
-
-ttk.Button(frame_settings, text="Set", width=8, command=set_f7_hotkey).grid(row=2, column=2, padx=5, pady=3)
-
-# Spotify hotkey setting
-ttk.Label(frame_settings, text="Spotify pause hotkey:").grid(row=3, column=0, sticky="w", padx=5, pady=3)
-entry_spotify = ttk.Entry(frame_settings, textvariable=spotify_hotkey_var, width=20)
-entry_spotify.grid(row=3, column=1, sticky="w", padx=5, pady=3)
-
-def on_spotify_entry_return(event):
-    current = spotify_hotkey_var.get().strip()
-    if current and "+" in current.lower() and not " + " in current:
-        display = convert_to_display_format(current)
-        spotify_hotkey_var.set(display)
-    update_spotify_hotkey()
-entry_spotify.bind("<Return>", on_spotify_entry_return)
-entry_spotify.bind("<FocusOut>", lambda e: on_spotify_entry_return(None))
-
-is_listening_spotify = {"active": False}
-
-def set_spotify_hotkey():
-    """Capture Spotify hotkey."""
-    if is_listening_spotify["active"]:
-        return
-    is_listening_spotify["active"] = True
-    spotify_hotkey_var.set("Press any key...")
-
-    def on_selected(selected_string):
-        if selected_string.startswith("Key: "):
-            display_format = selected_string.replace("Key: ", "")
-            spotify_hotkey_var.set(display_format)
-        else:
-            spotify_hotkey_var.set("F8")  # Default fallback
-        is_listening_spotify["active"] = False
-        update_spotify_hotkey()
-
-    start_hotkey_capture(root, on_selected)
-
-ttk.Button(frame_settings, text="Set", width=8, command=set_spotify_hotkey).grid(row=3, column=2, padx=5, pady=3)
 
 
 def save_settings():
@@ -342,9 +167,6 @@ def save_settings():
         "hotkey": selected_hotkey["key"],
         "youtube_pause_enabled": youtube_pause_var.get(),
         "f6_hotkey": f6_hotkey_var.get(),
-        "f7_hotkey": f7_hotkey_var.get(),
-        "spotify_pause_enabled": spotify_pause_var.get(),
-        "spotify_hotkey": spotify_hotkey_var.get(),
         "pin_enabled": pin_var.get()
     }
     save_last_settings(data)
@@ -655,15 +477,9 @@ if last_settings:
         hotkey_var.set(selected_hotkey["key"])
     youtube_pause_var.set(last_settings.get("youtube_pause_enabled", False))
     f6_hotkey_var.set(last_settings.get("f6_hotkey", "F6"))
-    f7_hotkey_var.set(last_settings.get("f7_hotkey", "F7"))
-    spotify_pause_var.set(last_settings.get("spotify_pause_enabled", False))
-    spotify_hotkey_var.set(last_settings.get("spotify_hotkey", "F8"))
     pin_var.set(last_settings.get("pin_enabled", False))
     toggle_pin()
     update_f6_hotkey()
-    update_f7_hotkey()
-    update_spotify_hotkey()
-    toggle_spotify_pause()
-    toggle_youtube_pause()  # Apply the saved setting
+
 
 root.mainloop()
